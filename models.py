@@ -14,6 +14,50 @@ def build_mlp(layers_dims: List[int]):
     layers.append(nn.Linear(layers_dims[-2], layers_dims[-1]))
     return nn.Sequential(*layers)
 
+class Encoder(torch.nn.Module):
+    def __init__(self, input_channels=2, device="cuda", bs=64, n_steps=17, embedding_dim=256):
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv2d(input_channels, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, embedding_dim, kernel_size=3, stride=2, padding=1),
+            nn.ReLU()
+        )
+        self.fc = nn.Linear(embedding_dim * 9 * 9, embedding_dim)
+
+    def forward(self, x):
+        x = self.cnn(x)
+        x = torch.flatten(x, start_dim=1)
+        return self.fc(x)
+
+class Predictor(torch.nn.Module):
+    def __init__(self, embedding_dim=256, action_dim=2):
+        super().__init__()
+        self.fc = build_mlp([embedding_dim + action_dim, 256, embedding_dim])
+
+    def forward(self, state, action):
+        x = torch.cat([state, action], dim=-1)
+        return self.fc(x)
+
+class JEPA(torch.nn.Module):
+    def __init__(self, encoder, predictor):
+        super().__init__()
+        self.encoder = encoder
+        self.predictor = predictor
+        self.repr_dim = encoder.fc.out_features
+
+    def forward(self, observations, actions):
+        batch_size, timesteps, _, _, _ = observations.size()
+        predicted_states = []
+
+        s_pred = self.encoder(observations[:, 0])
+        predicted_states.append(s_pred)
+        for t in range(1, timesteps):
+            s_pred = self.predictor(s_pred, actions[:, t-1])
+            predicted_states.append(s_pred)
+        return torch.stack(predicted_states, dim=1)
 
 class MockModel(torch.nn.Module):
     """
