@@ -20,7 +20,7 @@ from normalizer import Normalizer
 @dataclass
 class ProbingConfig(ConfigBase):
     probe_targets: str = "locations"
-    lr: float = 0.0002
+    lr: float = 0.001
     epochs: int = 20
     schedule: LRSchedule = LRSchedule.Cosine
     sample_timesteps: int = 30
@@ -113,7 +113,7 @@ class ProbingEvaluator:
                 ################################################################################
                 # TODO: Forward pass through your model
                 init_states = batch.states[:, 0:1]  # BS, 1, C, H, W
-                pred_encs = model(states=init_states, actions=batch.actions)
+                pred_encs = model(init_states, batch.actions)
                 pred_encs = pred_encs.transpose(0, 1)  # # BS, T, D --> T, BS, D
 
                 # Make sure pred_encs has shape (T, BS, D) at this point
@@ -211,7 +211,7 @@ class ProbingEvaluator:
             ################################################################################
             # TODO: Forward pass through your model
             init_states = batch.states[:, 0:1]  # BS, 1 C, H, W
-            pred_encs = model(states=init_states, actions=batch.actions)
+            pred_encs = model(init_states, batch.actions)
             # # BS, T, D --> T, BS, D
             pred_encs = pred_encs.transpose(0, 1)
 

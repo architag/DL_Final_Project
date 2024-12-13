@@ -4,7 +4,6 @@ from torch import nn
 from torch.nn import functional as F
 import torch
 
-
 def build_mlp(layers_dims: List[int]):
     layers = []
     for i in range(len(layers_dims) - 2):
@@ -14,18 +13,35 @@ def build_mlp(layers_dims: List[int]):
     layers.append(nn.Linear(layers_dims[-2], layers_dims[-1]))
     return nn.Sequential(*layers)
 
+def build_cnn(layers_dims: List[int]):
+    layers = []
+    for i in range(len(layers_dims) - 2):
+        layers.append(nn.Conv2d(layers_dims[i], layers_dims[i + 1], kernel_size=3, stride=2, padding=1))
+        layers.append(nn.BatchNorm2d(layers_dims[i + 1]))
+        layers.append(nn.ReLU(True))
+    layers.append(nn.Conv2d(layers_dims[-2], layers_dims[-1], kernel_size=3, stride=2, padding=1))
+    return nn.Sequential(*layers)
+
 class Encoder(torch.nn.Module):
-    def __init__(self, input_channels=2, device="cuda", bs=64, n_steps=17, embedding_dim=256):
+    def __init__(self, embedding_dim=256):
         super().__init__()
         self.cnn = nn.Sequential(
-            nn.Conv2d(input_channels, 64, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(2, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.Conv2d(128, embedding_dim, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(embedding_dim),
             nn.ReLU()
         )
-        self.fc = nn.Linear(embedding_dim * 9 * 9, embedding_dim)
+        # self.cnn = build_cnn([2, 32, 64, 128, 256, embedding_dim])
+        self.fc = nn.Linear(embedding_dim * 5 * 5, embedding_dim)
+        # self.fc = nn.Linear(embedding_dim * 3 * 3, embedding_dim)
 
     def forward(self, x):
         x = self.cnn(x)
@@ -35,29 +51,49 @@ class Encoder(torch.nn.Module):
 class Predictor(torch.nn.Module):
     def __init__(self, embedding_dim=256, action_dim=2):
         super().__init__()
-        self.fc = build_mlp([embedding_dim + action_dim, 256, embedding_dim])
+        self.fc = build_mlp([embedding_dim + action_dim, embedding_dim, embedding_dim])
 
     def forward(self, state, action):
         x = torch.cat([state, action], dim=-1)
         return self.fc(x)
 
 class JEPA(torch.nn.Module):
-    def __init__(self, encoder, predictor):
+    def __init__(self, embedding_dim=256, action_dim=2, momentum=0.99):
         super().__init__()
-        self.encoder = encoder
-        self.predictor = predictor
-        self.repr_dim = encoder.fc.out_features
+        self.encoder = Encoder(embedding_dim=embedding_dim)
+        self.predictor = Predictor(embedding_dim=embedding_dim, action_dim=action_dim)
+        self.target_encoder = Encoder(embedding_dim=embedding_dim)
+        self.repr_dim = embedding_dim
+        self.momentum = momentum
 
-    def forward(self, observations, actions):
-        batch_size, timesteps, _, _, _ = observations.size()
-        predicted_states = []
+        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
+            param_k.data.copy_(param_q.data)
+            param_k.requires_grad = False
 
-        s_pred = self.encoder(observations[:, 0])
-        predicted_states.append(s_pred)
-        for t in range(1, timesteps):
-            s_pred = self.predictor(s_pred, actions[:, t-1])
-            predicted_states.append(s_pred)
+    def forward(self, states, actions):
+        b, t, c, h, w = states.size()
+        _, timesteps, _ = actions.size()
+        states_reshaped = states.view(-1, c, h, w)
+        encoded_states = self.encoder(states_reshaped)
+        encoded_states = encoded_states.view(b, t, -1)
+        predicted_states = [encoded_states[:, 0]]
+
+        if t == 1:
+            pred_state = encoded_states[:, 0]
+            for ts in range(timesteps):
+                pred_state = self.predictor(pred_state, actions[:, ts])
+                predicted_states.append(pred_state)
+        else:
+            for ts in range(timesteps):
+                pred_state = self.predictor(encoded_states[:, ts], actions[:, ts])
+                predicted_states.append(pred_state)
+        
         return torch.stack(predicted_states, dim=1)
+    
+    @torch.no_grad()
+    def update_target_encoder(self):
+        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
+            param_k.data = param_k.data * self.momentum + param_q.data * (1.0 - self.momentum)
 
 class MockModel(torch.nn.Module):
     """

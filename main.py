@@ -1,7 +1,7 @@
 from dataset import create_wall_dataloader
 from evaluator import ProbingEvaluator
 import torch
-from models import Encoder, Predictor, JEPA
+from models import JEPA, Encoder, Predictor, Prober
 import glob
 
 
@@ -44,11 +44,8 @@ def load_data(device):
 def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
-    encoder = Encoder(input_channels=2, embedding_dim=256)
-    predictor = Predictor(embedding_dim=256, action_dim=2)
-    target_encoder = Encoder(input_channels=2, embedding_dim=256)
-    model = JEPA(encoder, predictor, target_encoder).to(device)
-    model.load_state_dict(torch.load("trained_jepa_model.pth", weights_only=True, map_location=torch.device('cpu')))
+    model = JEPA(embedding_dim=256, action_dim=2, momentum=0.99).to(device)
+    model.load_state_dict(torch.load("jepa_model_train_val_inv_lam_10_var_gam_10_cov_mu_1_lr_0.0001.pth", weights_only=True))
     return model
 
 
